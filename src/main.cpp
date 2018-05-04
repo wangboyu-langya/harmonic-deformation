@@ -21,20 +21,35 @@
 
 #include "Lasso.h"
 #include "Colors.h"
+#include "../../../../../Library/libigl/include/igl/readOFF.h"
+#include "../../../../../Library/libigl/external/eigen/Eigen/Dense"
+#include "../../../../../Library/libigl/external/eigen/Eigen/src/Core/Matrix.h"
+#include "../../../../../Library/libigl/include/igl/unproject.h"
 
 //activate this for alternate UI (easier to debug)
 //#define UPDATE_ONLY_ON_UP
 
 using namespace std;
+using namespace Eigen;
+using namespace igl;
 
+bool ifdebug = true;
 //vertex array, #V x3
 Eigen::MatrixXd V(0, 3);
 //harmonic coordinates in three dimension, stands for x, y, z respectively, #V x1
 Eigen::MatrixXd X(0, 3);
 Eigen::MatrixXd Y(0, 3);
 Eigen::MatrixXd Z(0, 3);
+//cage vertex array, #V x3
+Eigen::MatrixXd VC(0, 3);
+// matrix used to draw cage edge
+VectorXd R1, R2;
+//cage edge
+Eigen::MatrixXd C1, C2;
 //face array, #F x3
 Eigen::MatrixXi F(0, 3);
+// inner face
+Eigen::MatrixXi FI(0, 3);
 
 //mouse interaction
 enum MouseMode {
@@ -89,6 +104,7 @@ bool callback_mouse_move(igl::opengl::glfw::Viewer &viewer, int mouse_x, int mou
 bool callback_mouse_up(igl::opengl::glfw::Viewer &viewer, int button, int modifier);
 
 bool callback_pre_draw(igl::opengl::glfw::Viewer &viewer);
+bool callback_pre_draw_point(igl::opengl::glfw::Viewer &viewer);
 
 bool callback_key_down(igl::opengl::glfw::Viewer &viewer, unsigned char key, int modifiers);
 
@@ -123,7 +139,6 @@ bool solve(igl::opengl::glfw::Viewer &viewer) {
         Z = V.col(i);
         solve_scalar(i, Z);
         V.col(i) = Z;
-//        cout << Z << endl;
     }
     return true;
 };
@@ -151,15 +166,17 @@ void init_handle() {
     // Find boundary edges
     igl::boundary_facets(F, E);
     // Find boundary vertices
-    igl::unique(E, b, IA, IC);
-//    cout << b << endl;
+    if (ifdebug) {
+        b.resize(4);
+        b << 0, 1, 2, 3;
+    }
+    else igl::unique(E, b, IA, IC);
+    if (ifdebug) cout << "b is " << b << endl;
     // List of all vertex indices
     igl::colon<int>(0,V.rows()-1,all);
     // List of interior indices
     igl::setdiff(all,b,in,IA);
-//    cout << in << endl;
-//    VectorXi temp;
-//    temp = b, b = in, in = temp;
+    if (ifdebug) cout << "in is" << in << endl;
     // Construct and slice up Laplacian
     igl::cotmatrix(V,F,L);
     igl::slice(L,in,in,L_in_in);
@@ -172,6 +189,26 @@ void init_handle() {
     }
     onNewHandleID();
     get_new_handle_locations();
+    // slice VC
+    igl::slice(V, b, 1, VC);
+    // get new FI
+    if (ifdebug) {
+        FI.resize(2, 3);
+        FI << 4, 6, 5, 5, 6, 7;
+    }
+}
+
+void init_cage() {
+    R1.setLinSpaced(VC.rows(), 0, VC.rows() - 1);
+    R2.setLinSpaced(VC.rows(), 1, VC.rows());
+    R2(VC.rows() - 1) = 0;
+}
+
+void update_cage() {
+    slice(VC, R1, 1, C1);
+    slice(VC, R2, 1, C2);
+    if (ifdebug) cout << "C1: " << C1 << endl;
+    if (ifdebug) cout << "C2: " << C2 << endl;
 }
 
 int main(int argc, char *argv[]) {
@@ -182,17 +219,16 @@ int main(int argc, char *argv[]) {
 //  }
 
     // Read mesh
-//  igl::readOFF(argv[1],V,F);
-//    igl::readOFF("../data/cube_2d.off", V, F);
-    igl::readOFF("../data/cube_2d_cage.off", V, F);
-    assert(V.rows() > 0);
-
-//    handle_id.setConstant(V.rows(), 1, -1);
+    //  igl::readOFF(argv[1],V,F);
+    igl::readOFF("../data/cube_2d.off", V, F);
     init_handle();
-
 
     // Plot the mesh
     igl::opengl::glfw::Viewer viewer;
+    viewer.data().clear();
+    viewer.data().set_mesh(V, FI);
+    // draw cage
+    init_cage();
 
     igl::opengl::glfw::imgui::ImGuiMenu menu;
     viewer.plugins.push_back(&menu);
@@ -221,17 +257,15 @@ int main(int argc, char *argv[]) {
     viewer.callback_mouse_down = callback_mouse_down;
     viewer.callback_mouse_move = callback_mouse_move;
     viewer.callback_mouse_up = callback_mouse_up;
-    viewer.callback_pre_draw = callback_pre_draw;
+//    viewer.callback_pre_draw = callback_pre_draw;
+    viewer.callback_pre_draw = callback_pre_draw_point;
 
-    viewer.data().clear();
-    viewer.data().set_mesh(V, F);
+//    viewer.data().clear();
+//    viewer.data().set_mesh(V, F);
 
     // Initialize selector
     lasso = std::unique_ptr<Lasso>(new Lasso(V, F, viewer));
-
-    viewer.data().point_size = 10;
     viewer.core.set_rotation_type(igl::opengl::ViewerCore::ROTATION_TYPE_TRACKBALL);
-
     viewer.launch();
 }
 
@@ -323,6 +357,73 @@ bool callback_mouse_up(igl::opengl::glfw::Viewer &viewer, int button, int modifi
     return false;
 };
 
+bool callback_pre_draw_point(igl::opengl::glfw::Viewer &viewer) {
+    // Initialize vertex colors
+    vertex_colors = Eigen::MatrixXd::Constant(V.rows(), 3, .9);
+
+    //clear points and lines
+    viewer.data().set_points(Eigen::MatrixXd::Zero(0, 3), Eigen::MatrixXd::Zero(0, 3));
+    viewer.data().set_edges(Eigen::MatrixXd::Zero(0, 3), Eigen::MatrixXi::Zero(0, 3), Eigen::MatrixXd::Zero(0, 3));
+
+    // update the vertex position all the time
+    viewer.data().V.resize(V.rows(), 3);
+    viewer.data().V << V;
+    slice(V, b, 1, VC);
+    slice(VC, R1, 1, C1);
+    slice(VC, R2, 1, C2);
+    // plot the cage
+    viewer.data().point_size = 20;
+    viewer.data().add_points(VC, Eigen::RowVector3d(1, 0, 0));
+    viewer.data().add_edges(C1, C2, Eigen::RowVector3d(1, 0, 0));
+
+
+    viewer.data().dirty |= igl::opengl::MeshGL::DIRTY_POSITION;
+
+#ifdef UPDATE_ONLY_ON_UP
+    //draw only the moving parts with a white line
+    if (moving_handle>=0)
+    {
+      Eigen::MatrixXd edges(3*F.rows(),6);
+      int num_edges = 0;
+      for (int fi = 0; fi<F.rows(); ++fi)
+      {
+        int firstPickedVertex = -1;
+        for(int vi = 0; vi<3 ; ++vi)
+          if (handle_id[F(fi,vi)] == moving_handle)
+          {
+            firstPickedVertex = vi;
+            break;
+          }
+        if(firstPickedVertex==-1)
+          continue;
+
+
+        Eigen::Matrix3d points;
+        for(int vi = 0; vi<3; ++vi)
+        {
+          int vertex_id = F(fi,vi);
+          if (handle_id[vertex_id] == moving_handle)
+          {
+            int index = -1;
+            // if face is already constrained, find index in the constraints
+            (handle_vertices.array()-vertex_id).cwiseAbs().minCoeff(&index);
+            points.row(vi) = handle_vertex_positions.row(index);
+          }
+          else
+            points.row(vi) =  V.row(vertex_id);
+
+        }
+        edges.row(num_edges++) << points.row(0), points.row(1);
+        edges.row(num_edges++) << points.row(1), points.row(2);
+        edges.row(num_edges++) << points.row(2), points.row(0);
+      }
+      edges.conservativeResize(num_edges, Eigen::NoChange);
+      viewer.data().add_edges(edges.leftCols(3), edges.rightCols(3), Eigen::RowVector3d(0.9,0.9,0.9));
+
+    }
+#endif
+    return false;
+}
 
 bool callback_pre_draw(igl::opengl::glfw::Viewer &viewer) {
     // Initialize vertex colors
