@@ -132,8 +132,8 @@ double orientation(Eigen::RowVector2d &p, Eigen::RowVector2d &q, Eigen::RowVecto
 void convex_hull(Eigen::MatrixXd & V, Eigen::MatrixXd & E, Eigen::MatrixXd & B){
     using namespace std::chrono;
     // Initialize Result
-    vector<int> hull;
     int n = V.rows();
+    vector<int> hull;
 
     // Find the leftmost point
     int l = 0;
@@ -154,62 +154,48 @@ void convex_hull(Eigen::MatrixXd & V, Eigen::MatrixXd & E, Eigen::MatrixXd & B){
     igl::opengl::glfw::Viewer viewer;
     viewer.data().clear();
     viewer.data().point_size = 10;
-//    V.conservativeResize(V.rows(), 3);
-//    VectorXd x;
-//    x.setZero(V.rows());
-//    V.col(2) = x;
-    viewer.data().set_mesh(V, F);
-//    V.conservativeResize(V.rows(), 2);
-    do
-    {
+    do {
         // Add current point to result
         hull.push_back(p);
-        cout << p << endl;
         pv = V.row(p);
         viewer.data().add_points(pv, Eigen::RowVector3d(1, 0, 0));
         cnt++;
-        // Search for a point 'q' such that orientation(p, x,
-        // q) is counterclockwise for all points 'x'. The idea
-        // is to keep track of last visited most counterclock-
-        // wise point in q. If any point 'i' is more counterclock-
-        // wise than q, then update q.
         q = (p+1)%n;
         qv = V.row(q);
-        for (int i = 0; i < n; i++)
-        {
+        for (int i = 0; i < n; i++) {
             // If i is more counterclockwise than current q, then
             // update q
             iv = V.row(i);
-//            if (orientation(V.row(p), V.row(i), V.row(q)) == 2)
             double val = orientation(pv, iv, qv);
-            if (val > 1e-10) {
-                cout << p << " " << i << " " << q << " " <<  val << endl;
-                q = i;
-                qv = V.row(q);
-            }
+            if (val > 1e-10) { q = i; qv = V.row(q); }
         }
         stop = high_resolution_clock::now();
         duration = duration_cast<seconds>(stop - start);
-        if (cnt % 100 == 0) {
-            cout << cnt << "boundary taks:" << duration.count() << endl;
-            viewer.launch();
-        }
-        // Now q is the most counterclockwise with respect to p
-        // Set p as q for next iteration, so that q is added to
-        // result 'hull'
+        // if there are too many points, print them
+        if (cnt % 100 == 0) { cout << cnt << "boundary taks:" << duration.count() << endl;}
         p = q;
-    } while (p != l);  // While we don't come to first point
-    viewer.launch();
-    // get the boundary
+    } while (p != l);
+    // get the boundary B and draw them with b_temp
     B.resize(hull.size(), 2);
-    for (int i = 0; i < hull.size(); ++i)
+    MatrixXd B_temp;
+    B_temp.resize(hull.size(), 2);
+    for (int i = 0; i < hull.size(); ++i) {
         B.row(i) = V.row(hull[i]);
+        if (i > 1)
+            B_temp.row(i) = V.row(hull[i - 1]);
+    }
+    B_temp.row(0) = B.row(hull.size() - 1);
     // get the edge
     E.resize(hull.size() - 1, 2);
     for (int i = 0; i < hull.size() - 2; ++i) {
         E(i, 0) = hull[i];
         E(i, 1) = hull[i + 1];
     }
+    // visualize the convex hull
+    viewer.data().add_points(VC, Eigen::RowVector3d(0, 1, 0));
+    viewer.data().add_edges(B, B_temp, Eigen::RowVector3d(1, 0, 0));
+    viewer.data().set_mesh(V, F);
+    viewer.launch();
 }
 
 void Reduction(Eigen::MatrixXd &V, Eigen::MatrixXi &F, int dim) {
@@ -396,8 +382,8 @@ int main(int argc, char *argv[]) {
 
     // Read mesh
     //  igl::readOFF(argv[1],V,F);
-//    igl::readOFF("../data/bunny.off", V, F);
-    igl::readOFF("../data/bunny500.off", V, F);
+    igl::readOFF("../data/bunny.off", V, F);
+//    igl::readOFF("../data/bunny500.off", V, F);
     Reduction(V, F, 0);
 //    igl::readOFF("../data/cube_2d.off", V, F);
 //    init_handle();
