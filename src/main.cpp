@@ -130,9 +130,16 @@ double orientation(Eigen::RowVector2d &p, Eigen::RowVector2d &q, Eigen::RowVecto
 
 void convex_hull(Eigen::MatrixXd &V, Eigen::MatrixXi &F, Eigen::MatrixXd &E, Eigen::MatrixXd &B) {
     using namespace std::chrono;
+    // adjust the size of the cage
+    double factor = 1.5;
     // Initialize Result
     int n = V.rows();
     vector<int> hull;
+    // computer the centroid and translate it
+    RowVector2d e; e << 0, 0;
+    for (int i = 0; i < V.rows(); ++i) e += V.row(i);
+    e(0) /= n; e(1) /= n;
+    for (int i = 0; i < V.rows(); ++i) V.row(i) -= e;
 
     // Find the leftmost point
     int l = 0;
@@ -162,8 +169,7 @@ void convex_hull(Eigen::MatrixXd &V, Eigen::MatrixXi &F, Eigen::MatrixXd &E, Eig
         q = (p + 1) % n;
         qv = V.row(q);
         for (int i = 0; i < n; i++) {
-            // If i is more counterclockwise than current q, then
-            // update q
+            // If i is more counterclockwise than current q, then update q
             iv = V.row(i);
             double val = orientation(pv, iv, qv);
             if (val > 1e-10) {
@@ -177,51 +183,37 @@ void convex_hull(Eigen::MatrixXd &V, Eigen::MatrixXi &F, Eigen::MatrixXd &E, Eig
         if (cnt % 100 == 0) { cout << cnt << "boundary taks:" << duration.count() << endl; }
         p = q;
     } while (p != l);
+
     // get the boundary B and draw them with b_temp
     B.resize(hull.size(), 2);
+    // add enlarged boundary to V
+    V.conservativeResize(n + B.rows(), V.cols());
     MatrixXd B_temp;
     B_temp.resize(hull.size(), 2);
     for (int i = 0; i < hull.size(); ++i) {
         B.row(i) = V.row(hull[i]);
+        for (int j = 0; j < B.cols(); ++j)
+            B(i, j) *= factor;
+        V.row(n + i) = B.row(i);
         if (i > 1)
-            B_temp.row(i) = V.row(hull[i - 1]);
+            B_temp.row(i) = B.row(i - 1);
     }
     B_temp.row(0) = B.row(hull.size() - 1);
     // get the edge
     E.resize(hull.size(), 2);
     for (int i = 0; i <= hull.size() - 2; ++i) {
-        E(i, 0) = hull[i];
-        E(i, 1) = hull[i + 1];
+        E(i, 0) = i + n;
+        E(i, 1) = i + 1 + n;
     }
-    E(hull.size() - 1, 0) = hull[hull.size() - 1];
-    E(hull.size() - 1, 1) = hull[0];
+    E(hull.size() - 1, 0) = hull.size() - 1 + n;
+    E(hull.size() - 1, 1) = n;
     // get the triangle
     MatrixXd Vt, Ht;
     MatrixXi Ft;
     igl::triangle::triangulate(V, E, Ht, "a0.005q", Vt, Ft);
     // visualize the convex hull
     viewer.data().add_edges(B, B_temp, Eigen::RowVector3d(1, 0, 0));
-    // this is an experiment to check whether it is possible to retrieve the triangle of V only
-    // it turns out to be impossible
-//    F.resize(Ft.rows(), Ft.cols());
-//    int nf = 0;
-//    for (int i = 0; i < Ft.rows(); ++i) {
-//        if ((Ft(i, 0) <= n - 1) & (Ft(i, 1) <= n - 1) & (Ft(i, 2) <= n - 1)) {
-//            F.row(nf) = Ft.row(i);
-//            nf++;
-//        }
-//    }
-//    F.conservativeResize(nf, F.cols());
     viewer.data().set_mesh(Vt, Ft);
-    // this is to confirm that the original vertex is reserved
-    int indicator = 0;
-    for (int i = 0; i < V.rows(); ++i) {
-        if (V.row(i) != Vt.row(i)) {
-            cout << "V:" << V.row(i) << "|" << "Vt:" << Vt.row(i) << endl;
-            indicator = 1;
-        }
-    }
-    if (indicator) cout << "Damn it!!" << endl;
     viewer.launch();
 }
 
