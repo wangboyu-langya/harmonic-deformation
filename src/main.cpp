@@ -106,6 +106,7 @@ bool callback_mouse_move(igl::opengl::glfw::Viewer &viewer, int mouse_x, int mou
 bool callback_mouse_up(igl::opengl::glfw::Viewer &viewer, int button, int modifier);
 
 bool callback_pre_draw(igl::opengl::glfw::Viewer &viewer);
+
 bool callback_pre_draw_point(igl::opengl::glfw::Viewer &viewer);
 
 bool callback_key_down(igl::opengl::glfw::Viewer &viewer, unsigned char key, int modifiers);
@@ -115,21 +116,19 @@ void onNewHandleID();
 void applySelection();
 
 Eigen::MatrixXi E;
-Eigen::VectorXi b,IA,IC;
-Eigen::VectorXi all,in;
-Eigen::SparseMatrix<double> L,L_in_in,L_in_b;
+Eigen::VectorXi b, IA, IC;
+Eigen::VectorXi all, in;
+Eigen::SparseMatrix<double> L, L_in_in, L_in_b;
 
 
-
-double orientation(Eigen::RowVector2d &p, Eigen::RowVector2d &q, Eigen::RowVector2d &r)
-{
-	double val = (q(1) - p(1)) * (r(0) - q(0)) - (q(0) - p(0)) * (r(1) - q(1));
+double orientation(Eigen::RowVector2d &p, Eigen::RowVector2d &q, Eigen::RowVector2d &r) {
+    double val = (q(1) - p(1)) * (r(0) - q(0)) - (q(0) - p(0)) * (r(1) - q(1));
 //    if (abs(val) < 1e-10) return 0;
 //	return (val > 0)? 1: 2; // clock or counterclock wise
     return val;
 }
 
-void convex_hull(Eigen::MatrixXd & V, Eigen::MatrixXd & E, Eigen::MatrixXd & B){
+void convex_hull(Eigen::MatrixXd &V, Eigen::MatrixXi &F, Eigen::MatrixXd &E, Eigen::MatrixXd &B) {
     using namespace std::chrono;
     // Initialize Result
     int n = V.rows();
@@ -160,19 +159,22 @@ void convex_hull(Eigen::MatrixXd & V, Eigen::MatrixXd & E, Eigen::MatrixXd & B){
         pv = V.row(p);
         viewer.data().add_points(pv, Eigen::RowVector3d(1, 0, 0));
         cnt++;
-        q = (p+1)%n;
+        q = (p + 1) % n;
         qv = V.row(q);
         for (int i = 0; i < n; i++) {
             // If i is more counterclockwise than current q, then
             // update q
             iv = V.row(i);
             double val = orientation(pv, iv, qv);
-            if (val > 1e-10) { q = i; qv = V.row(q); }
+            if (val > 1e-10) {
+                q = i;
+                qv = V.row(q);
+            }
         }
         stop = high_resolution_clock::now();
         duration = duration_cast<seconds>(stop - start);
         // if there are too many points, print them
-        if (cnt % 100 == 0) { cout << cnt << "boundary taks:" << duration.count() << endl;}
+        if (cnt % 100 == 0) { cout << cnt << "boundary taks:" << duration.count() << endl; }
         p = q;
     } while (p != l);
     // get the boundary B and draw them with b_temp
@@ -186,15 +188,40 @@ void convex_hull(Eigen::MatrixXd & V, Eigen::MatrixXd & E, Eigen::MatrixXd & B){
     }
     B_temp.row(0) = B.row(hull.size() - 1);
     // get the edge
-    E.resize(hull.size() - 1, 2);
-    for (int i = 0; i < hull.size() - 2; ++i) {
+    E.resize(hull.size(), 2);
+    for (int i = 0; i <= hull.size() - 2; ++i) {
         E(i, 0) = hull[i];
         E(i, 1) = hull[i + 1];
     }
+    E(hull.size() - 1, 0) = hull[hull.size() - 1];
+    E(hull.size() - 1, 1) = hull[0];
+    // get the triangle
+    MatrixXd Vt, Ht;
+    MatrixXi Ft;
+    igl::triangle::triangulate(V, E, Ht, "a0.005q", Vt, Ft);
     // visualize the convex hull
-    viewer.data().add_points(VC, Eigen::RowVector3d(0, 1, 0));
     viewer.data().add_edges(B, B_temp, Eigen::RowVector3d(1, 0, 0));
-    viewer.data().set_mesh(V, F);
+    // this is an experiment to check whether it is possible to retrieve the triangle of V only
+    // it turns out to be impossible
+//    F.resize(Ft.rows(), Ft.cols());
+//    int nf = 0;
+//    for (int i = 0; i < Ft.rows(); ++i) {
+//        if ((Ft(i, 0) <= n - 1) & (Ft(i, 1) <= n - 1) & (Ft(i, 2) <= n - 1)) {
+//            F.row(nf) = Ft.row(i);
+//            nf++;
+//        }
+//    }
+//    F.conservativeResize(nf, F.cols());
+    viewer.data().set_mesh(Vt, Ft);
+    // this is to confirm that the original vertex is reserved
+    int indicator = 0;
+    for (int i = 0; i < V.rows(); ++i) {
+        if (V.row(i) != Vt.row(i)) {
+            cout << "V:" << V.row(i) << "|" << "Vt:" << Vt.row(i) << endl;
+            indicator = 1;
+        }
+    }
+    if (indicator) cout << "Damn it!!" << endl;
     viewer.launch();
 }
 
@@ -205,92 +232,116 @@ void Reduction(Eigen::MatrixXd &V, Eigen::MatrixXi &F, int dim) {
     VectorXd x;
     x.setZero(V.rows());
     // reduce V to 2d
-    if (dim == 0) {V.col(0) = V.col(2); V.col(2) = x;}
-    if (dim == 1) {V.col(1) = V.col(2); V.col(2) = x;}
-	NoChange_t change = NoChange;
+    if (dim == 0) {
+        V.col(0) = V.col(2);
+        V.col(2) = x;
+    }
+    if (dim == 1) {
+        V.col(1) = V.col(2);
+        V.col(2) = x;
+    }
+    NoChange_t change = NoChange;
     V.conservativeResize(change, 2);
     // find the inner boundary of reduced point cloud
     Eigen::MatrixXd EI, BI;
-    convex_hull(V, EI, BI);
-    // get the outer boundary
-    Eigen::MatrixXd BO, EO, VB;
-    BO.resize(BI.rows(), 2);
-    for (int i = 0; i < BO.rows(); ++i) {
-        for (int j = 0; j < BO.cols(); ++j) {
-            if (BI(i, j) > 0) BO(i, j) = BI(i, j) * factor;
-            else BO(i, j) *= - BI(i, j) * factor;
-        }
-    }
-    EO = EI.replicate(1, 1);
-    // get the outer triangularization
-    Eigen::MatrixXd E, B;
-    E.resize(2 * EI.rows(), 2);
-    B.resize(2 * BI.rows(), 2);
-    E << EI, EO;
-    B << BI, BO;
-    Eigen::MatrixXd VO;
-    Eigen::MatrixXi FO;
-    Eigen::RowVector2d y;
-    y << 0, 0;
-    for (int i = 0; i < BI.rows(); ++i) {
-        y += BI.row(i);
-    }
-    y(0) /= BI.rows();
-    y(1) /= BI.rows();
-    igl::triangle::triangulate(B, E , y, "a0.005q", VO, FO);
-    // get the inner triangularization
-    Eigen::MatrixXd VI, HI;
-    Eigen::MatrixXi FF, FI;
-    igl::triangle::triangulate(BI, EI , HI, "a0.005q", VI, FI);
-    // get the final V
-    MatrixXd VF;
-    VF.resize(VO.rows() + VI.rows(), 2);
-    FF.resize(FO.rows() + FI.rows(), 2);
-    VF << VI, VO;
-    FF << FI, FO;
-//    BI.conservativeResize(2 * BI.rows(), NoChange_t);
-//    Eigen::VectorXi RB;
-//    RB.setLinSpaced(BI.rows(), 0 + BI.rows(), BI.rows() * 2 - 1);
-//    igl::slice_into(BO, RB, 1, BI);
-    // Triangulate the interior
-    // Find boundary vertex
-    Eigen::MatrixXi EF;
-    Eigen::VectorXi b, IA, IC;
-    igl::boundary_facets(FF, EF);
-    igl::unique(EF, b, IA, IC);
-    //cage vertex array, #V x3
-    Eigen::MatrixXd VC(0, 2);
-    igl::slice(VF, b, 1, VC);
-    //get boundary edge
-    VectorXd R1, R2;
-    R1.setLinSpaced(VC.rows(), 0, VC.rows() - 1);
-    R2.setLinSpaced(VC.rows(), 1, VC.rows());
-    R2(VC.rows() - 1) = 0;
-    Eigen::MatrixXd C1, C2;
-    slice(VC, R1, 1, C1);
-    slice(VC, R2, 1, C2);
-//     plot the cage
+    convex_hull(V, F, EI, BI);
+    // try get the triangle
+    MatrixXd Ht, Vt;
+    MatrixXi Ft, Et;
+//    VectorXi R1, R2;
+//    Et.resize(EI.rows() * 2, 1);
+//    R1.setLinSpaced(EI.rows(), 0, Et.rows() - 2);
+//    R2.setLinSpaced(EI.rows(), 1, Et.rows() - 1);
+//    igl::slice_into(EI.col(1), R1, 1, Et);
+//    igl::slice_into(EI.col(2), R2, 1, Et);
+    igl::triangle::triangulate(V, EI, Ht, "a0.005q", Vt, Ft);
+    //     plot the cage
     igl::opengl::glfw::Viewer viewer;
     viewer.data().clear();
-    viewer.data().set_mesh(VF, FI);
+    viewer.data().set_mesh(Vt, Ft);
     viewer.data().point_size = 20;
-    viewer.data().add_points(VC, Eigen::RowVector3d(1, 0, 0));
-    viewer.data().add_edges(C1, C2, Eigen::RowVector3d(1, 0, 0));
+    viewer.data().add_points(V, Eigen::RowVector3d(1, 0, 0));
     viewer.launch();
+//
+//    // get the outer boundary
+//    Eigen::MatrixXd BO, EO, VB;
+//    BO.resize(BI.rows(), 2);
+//    for (int i = 0; i < BO.rows(); ++i) {
+//        for (int j = 0; j < BO.cols(); ++j) {
+//            if (BI(i, j) > 0) BO(i, j) = BI(i, j) * factor;
+//            else BO(i, j) *= - BI(i, j) * factor;
+//        }
+//    }
+//    EO = EI.replicate(1, 1);
+//    // get the outer triangularization
+//    Eigen::MatrixXd E, B;
+//    E.resize(2 * EI.rows(), 2);
+//    B.resize(2 * BI.rows(), 2);
+//    E << EI, EO;
+//    B << BI, BO;
+//    Eigen::MatrixXd VO;
+//    Eigen::MatrixXi FO;
+//    Eigen::RowVector2d y;
+//    y << 0, 0;
+//    for (int i = 0; i < BI.rows(); ++i) {
+//        y += BI.row(i);
+//    }
+//    y(0) /= BI.rows();
+//    y(1) /= BI.rows();
+//    igl::triangle::triangulate(B, E , y, "a0.005q", VO, FO);
+//    // get the inner triangularization
+//    Eigen::MatrixXd VI, HI;
+//    Eigen::MatrixXi FF, FI;
+//    igl::triangle::triangulate(BI, EI , HI, "a0.005q", VI, FI);
+//    // get the final V
+//    MatrixXd VF;
+//    VF.resize(VO.rows() + VI.rows(), 2);
+//    FF.resize(FO.rows() + FI.rows(), 2);
+//    VF << VI, VO;
+//    FF << FI, FO;
+////    BI.conservativeResize(2 * BI.rows(), NoChange_t);
+////    Eigen::VectorXi RB;
+////    RB.setLinSpaced(BI.rows(), 0 + BI.rows(), BI.rows() * 2 - 1);
+////    igl::slice_into(BO, RB, 1, BI);
+//    // Triangulate the interior
+//    // Find boundary vertex
+//    Eigen::MatrixXi EF;
+//    Eigen::VectorXi b, IA, IC;
+//    igl::boundary_facets(FF, EF);
+//    igl::unique(EF, b, IA, IC);
+//    //cage vertex array, #V x3
+//    Eigen::MatrixXd VC(0, 2);
+//    igl::slice(VF, b, 1, VC);
+//    //get boundary edge
+//    VectorXd R1, R2;
+//    R1.setLinSpaced(VC.rows(), 0, VC.rows() - 1);
+//    R2.setLinSpaced(VC.rows(), 1, VC.rows());
+//    R2(VC.rows() - 1) = 0;
+//    Eigen::MatrixXd C1, C2;
+//    slice(VC, R1, 1, C1);
+//    slice(VC, R2, 1, C2);
+////     plot the cage
+//    igl::opengl::glfw::Viewer viewer;
+//    viewer.data().clear();
+//    viewer.data().set_mesh(VF, FI);
+//    viewer.data().point_size = 20;
+//    viewer.data().add_points(VC, Eigen::RowVector3d(1, 0, 0));
+//    viewer.data().add_edges(C1, C2, Eigen::RowVector3d(1, 0, 0));
+//    viewer.launch();
 }
 
-void solve_scalar(int dim, Eigen::VectorXd & Z) {
+void solve_scalar(int dim, Eigen::VectorXd &Z) {
     using namespace Eigen;
-  // Dirichlet boundary conditions from z-coordinate
-  VectorXd bc;
-  Z = V.col(dim);
-  igl::slice(Z,b,bc);
+    // Dirichlet boundary conditions from z-coordinate
+    VectorXd bc;
+    Z = V.col(dim);
+    igl::slice(Z, b, bc);
 
-  // Solve PDE
-  SimplicialLLT<SparseMatrix<double > > solver(-L_in_in);
-  VectorXd Z_in = solver.solve(L_in_b*bc);
-  // slice into solution
-  igl::slice_into(Z_in,in,Z);
+    // Solve PDE
+    SimplicialLLT<SparseMatrix<double> > solver(-L_in_in);
+    VectorXd Z_in = solver.solve(L_in_b * bc);
+    // slice into solution
+    igl::slice_into(Z_in, in, Z);
 }
 
 bool solve(igl::opengl::glfw::Viewer &viewer) {
@@ -331,18 +382,17 @@ void init_handle() {
     if (ifdebug) {
         b.resize(4);
         b << 0, 1, 2, 3;
-    }
-    else igl::unique(E, b, IA, IC);
+    } else igl::unique(E, b, IA, IC);
     if (ifdebug) cout << "b is " << b << endl;
     // List of all vertex indices
-    igl::colon<int>(0,V.rows()-1,all);
+    igl::colon<int>(0, V.rows() - 1, all);
     // List of interior indices
-    igl::setdiff(all,b,in,IA);
+    igl::setdiff(all, b, in, IA);
     if (ifdebug) cout << "in is" << in << endl;
     // Construct and slice up Laplacian
-    igl::cotmatrix(V,F,L);
-    igl::slice(L,in,in,L_in_in);
-    igl::slice(L,in,b,L_in_b);
+    igl::cotmatrix(V, F, L);
+    igl::slice(L, in, in, L_in_in);
+    igl::slice(L, in, b, L_in_b);
 
     // init handle
     handle_id.setConstant(V.rows(), 1, -1);
