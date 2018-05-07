@@ -17,14 +17,16 @@
 #include <igl/unique.h>
 #include <igl/opengl/glfw/Viewer.h>
 #include <Eigen/Sparse>
+#include <igl/triangle/triangulate.h>
+#include <vector>
 #include <iostream>
 
 #include "Lasso.h"
 #include "Colors.h"
-#include "../../../../../Library/libigl/include/igl/readOFF.h"
-#include "../../../../../Library/libigl/external/eigen/Eigen/Dense"
-#include "../../../../../Library/libigl/external/eigen/Eigen/src/Core/Matrix.h"
-#include "../../../../../Library/libigl/include/igl/unproject.h"
+#include "igl/readOFF.h"
+#include "Eigen/Dense"
+#include "Eigen/Core"
+#include "igl/unproject.h"
 
 //activate this for alternate UI (easier to debug)
 //#define UPDATE_ONLY_ON_UP
@@ -116,6 +118,180 @@ Eigen::MatrixXi E;
 Eigen::VectorXi b,IA,IC;
 Eigen::VectorXi all,in;
 Eigen::SparseMatrix<double> L,L_in_in,L_in_b;
+
+
+
+double orientation(Eigen::RowVector2d &p, Eigen::RowVector2d &q, Eigen::RowVector2d &r)
+{
+	double val = (q(1) - p(1)) * (r(0) - q(0)) - (q(0) - p(0)) * (r(1) - q(1));
+//    if (abs(val) < 1e-10) return 0;
+//	return (val > 0)? 1: 2; // clock or counterclock wise
+    return val;
+}
+
+void convex_hull(Eigen::MatrixXd & V, Eigen::MatrixXd & E, Eigen::MatrixXd & B){
+    using namespace std::chrono;
+    // Initialize Result
+    vector<int> hull;
+    int n = V.rows();
+
+    // Find the leftmost point
+    int l = 0;
+    for (int i = 1; i < V.rows(); i++)
+        if (V(i, 0) < V(l, 0))
+            l = i;
+
+    // Start from leftmost point, keep moving counterclockwise
+    // until reach the start point again.  This loop runs O(h)
+    // times where h is number of points in result or output.
+    int p = l, q;
+    auto start = high_resolution_clock::now();
+    auto stop = high_resolution_clock::now();
+    auto duration = duration_cast<seconds>(stop - start);
+    int cnt = 0;
+    Eigen::RowVector2d pv, qv, iv;
+    // visualize the result
+    igl::opengl::glfw::Viewer viewer;
+    viewer.data().clear();
+    viewer.data().point_size = 10;
+//    V.conservativeResize(V.rows(), 3);
+//    VectorXd x;
+//    x.setZero(V.rows());
+//    V.col(2) = x;
+    viewer.data().set_mesh(V, F);
+//    V.conservativeResize(V.rows(), 2);
+    do
+    {
+        // Add current point to result
+        hull.push_back(p);
+        cout << p << endl;
+        pv = V.row(p);
+        viewer.data().add_points(pv, Eigen::RowVector3d(1, 0, 0));
+        cnt++;
+        // Search for a point 'q' such that orientation(p, x,
+        // q) is counterclockwise for all points 'x'. The idea
+        // is to keep track of last visited most counterclock-
+        // wise point in q. If any point 'i' is more counterclock-
+        // wise than q, then update q.
+        q = (p+1)%n;
+        qv = V.row(q);
+        for (int i = 0; i < n; i++)
+        {
+            // If i is more counterclockwise than current q, then
+            // update q
+            iv = V.row(i);
+//            if (orientation(V.row(p), V.row(i), V.row(q)) == 2)
+            double val = orientation(pv, iv, qv);
+            if (val > 1e-10) {
+                cout << p << " " << i << " " << q << " " <<  val << endl;
+                q = i;
+                qv = V.row(q);
+            }
+        }
+        stop = high_resolution_clock::now();
+        duration = duration_cast<seconds>(stop - start);
+        if (cnt % 100 == 0) {
+            cout << cnt << "boundary taks:" << duration.count() << endl;
+            viewer.launch();
+        }
+        // Now q is the most counterclockwise with respect to p
+        // Set p as q for next iteration, so that q is added to
+        // result 'hull'
+        p = q;
+    } while (p != l);  // While we don't come to first point
+    viewer.launch();
+    // get the boundary
+    B.resize(hull.size(), 2);
+    for (int i = 0; i < hull.size(); ++i)
+        B.row(i) = V.row(hull[i]);
+    // get the edge
+    E.resize(hull.size() - 1, 2);
+    for (int i = 0; i < hull.size() - 2; ++i) {
+        E(i, 0) = hull[i];
+        E(i, 1) = hull[i + 1];
+    }
+}
+
+void Reduction(Eigen::MatrixXd &V, Eigen::MatrixXi &F, int dim) {
+    // parameter of cage
+    double factor = 1.2;
+    // reduce one dimension of V
+    VectorXd x;
+    x.setZero(V.rows());
+    // reduce V to 2d
+    if (dim == 0) {V.col(0) = V.col(2); V.col(2) = x;}
+    if (dim == 1) {V.col(1) = V.col(2); V.col(2) = x;}
+	NoChange_t change = NoChange;
+    V.conservativeResize(change, 2);
+    // find the inner boundary of reduced point cloud
+    Eigen::MatrixXd EI, BI;
+    convex_hull(V, EI, BI);
+    // get the outer boundary
+    Eigen::MatrixXd BO, EO, VB;
+    BO.resize(BI.rows(), 2);
+    for (int i = 0; i < BO.rows(); ++i) {
+        for (int j = 0; j < BO.cols(); ++j) {
+            if (BI(i, j) > 0) BO(i, j) = BI(i, j) * factor;
+            else BO(i, j) *= - BI(i, j) * factor;
+        }
+    }
+    EO = EI.replicate(1, 1);
+    // get the outer triangularization
+    Eigen::MatrixXd E, B;
+    E.resize(2 * EI.rows(), 2);
+    B.resize(2 * BI.rows(), 2);
+    E << EI, EO;
+    B << BI, BO;
+    Eigen::MatrixXd VO;
+    Eigen::MatrixXi FO;
+    Eigen::RowVector2d y;
+    y << 0, 0;
+    for (int i = 0; i < BI.rows(); ++i) {
+        y += BI.row(i);
+    }
+    y(0) /= BI.rows();
+    y(1) /= BI.rows();
+    igl::triangle::triangulate(B, E , y, "a0.005q", VO, FO);
+    // get the inner triangularization
+    Eigen::MatrixXd VI, HI;
+    Eigen::MatrixXi FF, FI;
+    igl::triangle::triangulate(BI, EI , HI, "a0.005q", VI, FI);
+    // get the final V
+    MatrixXd VF;
+    VF.resize(VO.rows() + VI.rows(), 2);
+    FF.resize(FO.rows() + FI.rows(), 2);
+    VF << VI, VO;
+    FF << FI, FO;
+//    BI.conservativeResize(2 * BI.rows(), NoChange_t);
+//    Eigen::VectorXi RB;
+//    RB.setLinSpaced(BI.rows(), 0 + BI.rows(), BI.rows() * 2 - 1);
+//    igl::slice_into(BO, RB, 1, BI);
+    // Triangulate the interior
+    // Find boundary vertex
+    Eigen::MatrixXi EF;
+    Eigen::VectorXi b, IA, IC;
+    igl::boundary_facets(FF, EF);
+    igl::unique(EF, b, IA, IC);
+    //cage vertex array, #V x3
+    Eigen::MatrixXd VC(0, 2);
+    igl::slice(VF, b, 1, VC);
+    //get boundary edge
+    VectorXd R1, R2;
+    R1.setLinSpaced(VC.rows(), 0, VC.rows() - 1);
+    R2.setLinSpaced(VC.rows(), 1, VC.rows());
+    R2(VC.rows() - 1) = 0;
+    Eigen::MatrixXd C1, C2;
+    slice(VC, R1, 1, C1);
+    slice(VC, R2, 1, C2);
+//     plot the cage
+    igl::opengl::glfw::Viewer viewer;
+    viewer.data().clear();
+    viewer.data().set_mesh(VF, FI);
+    viewer.data().point_size = 20;
+    viewer.data().add_points(VC, Eigen::RowVector3d(1, 0, 0));
+    viewer.data().add_edges(C1, C2, Eigen::RowVector3d(1, 0, 0));
+    viewer.launch();
+}
 
 void solve_scalar(int dim, Eigen::VectorXd & Z) {
     using namespace Eigen;
@@ -220,53 +396,56 @@ int main(int argc, char *argv[]) {
 
     // Read mesh
     //  igl::readOFF(argv[1],V,F);
-    igl::readOFF("../data/cube_2d.off", V, F);
-    init_handle();
-
-    // Plot the mesh
-    igl::opengl::glfw::Viewer viewer;
-    viewer.data().clear();
-    viewer.data().set_mesh(V, FI);
-    // draw cage
-    init_cage();
-
-    igl::opengl::glfw::imgui::ImGuiMenu menu;
-    viewer.plugins.push_back(&menu);
-    viewer.callback_key_down = callback_key_down;
-    // Add content to the default menu window
-    menu.callback_draw_viewer_menu = [&]() {
-        // Draw parent menu content
-        menu.draw_viewer_menu();
-
-        // Add new group
-        if (ImGui::CollapsingHeader("Deformation Controls", ImGuiTreeNodeFlags_DefaultOpen)) {
-
-            // Expose an enumeration type
-            ImGui::Combo("MouseMode", (int *) (&mouse_mode), "SELECT\0TRANSLATE\0ROTATE\0NONE\0\0");
-
-            // Add a button
-            if (ImGui::Button("ApplySelection")) {
-                applySelection();
-            }
-            if (ImGui::Button("ClearConstraints")) {
-                handle_id.setConstant(V.rows(), 1, -1);
-            }
-        }
-    };
-
-    viewer.callback_mouse_down = callback_mouse_down;
-    viewer.callback_mouse_move = callback_mouse_move;
-    viewer.callback_mouse_up = callback_mouse_up;
-//    viewer.callback_pre_draw = callback_pre_draw;
-    viewer.callback_pre_draw = callback_pre_draw_point;
-
+//    igl::readOFF("../data/bunny.off", V, F);
+    igl::readOFF("../data/bunny500.off", V, F);
+    Reduction(V, F, 0);
+//    igl::readOFF("../data/cube_2d.off", V, F);
+//    init_handle();
+//
+//    // Plot the mesh
+//    igl::opengl::glfw::Viewer viewer;
 //    viewer.data().clear();
-//    viewer.data().set_mesh(V, F);
-
-    // Initialize selector
-    lasso = std::unique_ptr<Lasso>(new Lasso(V, F, viewer));
-    viewer.core.set_rotation_type(igl::opengl::ViewerCore::ROTATION_TYPE_TRACKBALL);
-    viewer.launch();
+//    viewer.data().set_mesh(V, FI);
+//    // draw cage
+//    init_cage();
+//
+//    igl::opengl::glfw::imgui::ImGuiMenu menu;
+//    viewer.plugins.push_back(&menu);
+//    viewer.callback_key_down = callback_key_down;
+//    // Add content to the default menu window
+//    menu.callback_draw_viewer_menu = [&]() {
+//        // Draw parent menu content
+//        menu.draw_viewer_menu();
+//
+//        // Add new group
+//        if (ImGui::CollapsingHeader("Deformation Controls", ImGuiTreeNodeFlags_DefaultOpen)) {
+//
+//            // Expose an enumeration type
+//            ImGui::Combo("MouseMode", (int *) (&mouse_mode), "SELECT\0TRANSLATE\0ROTATE\0NONE\0\0");
+//
+//            // Add a button
+//            if (ImGui::Button("ApplySelection")) {
+//                applySelection();
+//            }
+//            if (ImGui::Button("ClearConstraints")) {
+//                handle_id.setConstant(V.rows(), 1, -1);
+//            }
+//        }
+//    };
+//
+//    viewer.callback_mouse_down = callback_mouse_down;
+//    viewer.callback_mouse_move = callback_mouse_move;
+//    viewer.callback_mouse_up = callback_mouse_up;
+////    viewer.callback_pre_draw = callback_pre_draw;
+//    viewer.callback_pre_draw = callback_pre_draw_point;
+//
+////    viewer.data().clear();
+////    viewer.data().set_mesh(V, F);
+//
+//    // Initialize selector
+//    lasso = std::unique_ptr<Lasso>(new Lasso(V, F, viewer));
+//    viewer.core.set_rotation_type(igl::opengl::ViewerCore::ROTATION_TYPE_TRACKBALL);
+//    viewer.launch();
 }
 
 
@@ -675,3 +854,6 @@ Eigen::Vector4f computeRotation(igl::opengl::glfw::Viewer &viewer,
     igl::quat_mult(drot_conj.data(), out.data(), rotation.data());
     return rotation;
 }
+
+
+
