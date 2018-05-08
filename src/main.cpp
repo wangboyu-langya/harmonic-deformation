@@ -35,7 +35,8 @@ using namespace std;
 using namespace Eigen;
 using namespace igl;
 
-bool ifdebug = true;
+bool ifdebug = false;
+bool ifreduce = true;
 //vertex array, #V x3
 Eigen::MatrixXd V(0, 3);
 //harmonic coordinates in three dimension, stands for x, y, z respectively, #V x1
@@ -44,6 +45,7 @@ Eigen::MatrixXd Y(0, 3);
 Eigen::MatrixXd Z(0, 3);
 //cage vertex array, #V x3
 Eigen::MatrixXd VC(0, 3);
+Eigen::MatrixXd Vn;
 // matrix used to draw cage edge
 VectorXd R1, R2;
 //cage edge
@@ -128,17 +130,20 @@ double orientation(Eigen::RowVector2d &p, Eigen::RowVector2d &q, Eigen::RowVecto
     return val;
 }
 
-void convex_hull(Eigen::MatrixXd &V, Eigen::MatrixXi &F, Eigen::MatrixXd &E, Eigen::MatrixXd &B) {
+void convex_hull(Eigen::MatrixXd &V, Eigen::MatrixXi &F, Eigen::MatrixXd Vn) {
     using namespace std::chrono;
+    MatrixXd E, B;
     // adjust the size of the cage
     double factor = 1.5;
     // Initialize Result
     int n = V.rows();
     vector<int> hull;
     // computer the centroid and translate it
-    RowVector2d e; e << 0, 0;
+    RowVector2d e;
+    e << 0, 0;
     for (int i = 0; i < V.rows(); ++i) e += V.row(i);
-    e(0) /= n; e(1) /= n;
+    e(0) /= n;
+    e(1) /= n;
     for (int i = 0; i < V.rows(); ++i) V.row(i) -= e;
 
     // Find the leftmost point
@@ -208,13 +213,13 @@ void convex_hull(Eigen::MatrixXd &V, Eigen::MatrixXi &F, Eigen::MatrixXd &E, Eig
     E(hull.size() - 1, 0) = hull.size() - 1 + n;
     E(hull.size() - 1, 1) = n;
     // get the triangle
-    MatrixXd Vt, Ht;
-    MatrixXi Ft;
-    igl::triangle::triangulate(V, E, Ht, "a0.005q", Vt, Ft);
+    MatrixXd Ht;
+    igl::triangle::triangulate(V, E, Ht, "a0.005q", Vn, F);
     // visualize the convex hull
     viewer.data().add_edges(B, B_temp, Eigen::RowVector3d(1, 0, 0));
-    viewer.data().set_mesh(Vt, Ft);
+    viewer.data().set_mesh(Vn, F);
     viewer.launch();
+    V = Vn;
 }
 
 void Reduction(Eigen::MatrixXd &V, Eigen::MatrixXi &F, int dim) {
@@ -235,91 +240,9 @@ void Reduction(Eigen::MatrixXd &V, Eigen::MatrixXi &F, int dim) {
     NoChange_t change = NoChange;
     V.conservativeResize(change, 2);
     // find the inner boundary of reduced point cloud
-    Eigen::MatrixXd EI, BI;
-    convex_hull(V, F, EI, BI);
-    // try get the triangle
-    MatrixXd Ht, Vt;
-    MatrixXi Ft, Et;
-//    VectorXi R1, R2;
-//    Et.resize(EI.rows() * 2, 1);
-//    R1.setLinSpaced(EI.rows(), 0, Et.rows() - 2);
-//    R2.setLinSpaced(EI.rows(), 1, Et.rows() - 1);
-//    igl::slice_into(EI.col(1), R1, 1, Et);
-//    igl::slice_into(EI.col(2), R2, 1, Et);
-    igl::triangle::triangulate(V, EI, Ht, "a0.005q", Vt, Ft);
-    //     plot the cage
-    igl::opengl::glfw::Viewer viewer;
-    viewer.data().clear();
-    viewer.data().set_mesh(Vt, Ft);
-    viewer.data().point_size = 20;
-    viewer.data().add_points(V, Eigen::RowVector3d(1, 0, 0));
-    viewer.launch();
-//
-//    // get the outer boundary
-//    Eigen::MatrixXd BO, EO, VB;
-//    BO.resize(BI.rows(), 2);
-//    for (int i = 0; i < BO.rows(); ++i) {
-//        for (int j = 0; j < BO.cols(); ++j) {
-//            if (BI(i, j) > 0) BO(i, j) = BI(i, j) * factor;
-//            else BO(i, j) *= - BI(i, j) * factor;
-//        }
-//    }
-//    EO = EI.replicate(1, 1);
-//    // get the outer triangularization
-//    Eigen::MatrixXd E, B;
-//    E.resize(2 * EI.rows(), 2);
-//    B.resize(2 * BI.rows(), 2);
-//    E << EI, EO;
-//    B << BI, BO;
-//    Eigen::MatrixXd VO;
-//    Eigen::MatrixXi FO;
-//    Eigen::RowVector2d y;
-//    y << 0, 0;
-//    for (int i = 0; i < BI.rows(); ++i) {
-//        y += BI.row(i);
-//    }
-//    y(0) /= BI.rows();
-//    y(1) /= BI.rows();
-//    igl::triangle::triangulate(B, E , y, "a0.005q", VO, FO);
-//    // get the inner triangularization
-//    Eigen::MatrixXd VI, HI;
-//    Eigen::MatrixXi FF, FI;
-//    igl::triangle::triangulate(BI, EI , HI, "a0.005q", VI, FI);
-//    // get the final V
-//    MatrixXd VF;
-//    VF.resize(VO.rows() + VI.rows(), 2);
-//    FF.resize(FO.rows() + FI.rows(), 2);
-//    VF << VI, VO;
-//    FF << FI, FO;
-////    BI.conservativeResize(2 * BI.rows(), NoChange_t);
-////    Eigen::VectorXi RB;
-////    RB.setLinSpaced(BI.rows(), 0 + BI.rows(), BI.rows() * 2 - 1);
-////    igl::slice_into(BO, RB, 1, BI);
-//    // Triangulate the interior
-//    // Find boundary vertex
-//    Eigen::MatrixXi EF;
-//    Eigen::VectorXi b, IA, IC;
-//    igl::boundary_facets(FF, EF);
-//    igl::unique(EF, b, IA, IC);
-//    //cage vertex array, #V x3
-//    Eigen::MatrixXd VC(0, 2);
-//    igl::slice(VF, b, 1, VC);
-//    //get boundary edge
-//    VectorXd R1, R2;
-//    R1.setLinSpaced(VC.rows(), 0, VC.rows() - 1);
-//    R2.setLinSpaced(VC.rows(), 1, VC.rows());
-//    R2(VC.rows() - 1) = 0;
-//    Eigen::MatrixXd C1, C2;
-//    slice(VC, R1, 1, C1);
-//    slice(VC, R2, 1, C2);
-////     plot the cage
-//    igl::opengl::glfw::Viewer viewer;
-//    viewer.data().clear();
-//    viewer.data().set_mesh(VF, FI);
-//    viewer.data().point_size = 20;
-//    viewer.data().add_points(VC, Eigen::RowVector3d(1, 0, 0));
-//    viewer.data().add_edges(C1, C2, Eigen::RowVector3d(1, 0, 0));
-//    viewer.launch();
+    convex_hull(V, F, Vn);
+    V.conservativeResize(change, 3);
+    V.col(2) = RowVectorXd::Zero(V.rows());
 }
 
 void solve_scalar(int dim, Eigen::VectorXd &Z) {
@@ -375,7 +298,8 @@ void init_handle() {
         b.resize(4);
         b << 0, 1, 2, 3;
     } else igl::unique(E, b, IA, IC);
-    if (ifdebug) cout << "b is " << b << endl;
+    if (ifdebug)
+        cout << "b is " << b << endl;
     // List of all vertex indices
     igl::colon<int>(0, V.rows() - 1, all);
     // List of interior indices
@@ -396,10 +320,11 @@ void init_handle() {
     // slice VC
     igl::slice(V, b, 1, VC);
     // get new FI
-    if (ifdebug) {
+    if (!ifreduce) {
         FI.resize(2, 3);
         FI << 4, 6, 5, 5, 6, 7;
     }
+    else FI = F;
 }
 
 void init_cage() {
@@ -416,64 +341,59 @@ void update_cage() {
 }
 
 int main(int argc, char *argv[]) {
-//  if (argc != 2)
-//  {
-//    cout << "Usage assignment5_bin mesh.off" << endl;
-//    exit(0);
-//  }
-
     // Read mesh
-    //  igl::readOFF(argv[1],V,F);
-    igl::readOFF("../data/bunny.off", V, F);
-//    igl::readOFF("../data/bunny500.off", V, F);
-    Reduction(V, F, 0);
-//    igl::readOFF("../data/cube_2d.off", V, F);
-//    init_handle();
-//
-//    // Plot the mesh
-//    igl::opengl::glfw::Viewer viewer;
+//     igl::readOFF("../data/bunny.off", V, F);
+    if (ifreduce) {
+        igl::readOFF("../data/bunny.off", V, F);
+        Reduction(V, F, 0);
+    }
+    else igl::readOFF("../data/cube_2d.off", V, F);
+    // get the cage
+    init_handle();
+    // Plot the mesh
+    igl::opengl::glfw::Viewer viewer;
+    viewer.data().clear();
+    viewer.data().set_mesh(V, FI);
+    // draw cage
+    init_cage();
+
+    igl::opengl::glfw::imgui::ImGuiMenu menu;
+    viewer.plugins.push_back(&menu);
+    viewer.callback_key_down = callback_key_down;
+    // Add content to the default menu window
+    menu.callback_draw_viewer_menu = [&]() {
+        // Draw parent menu content
+        menu.draw_viewer_menu();
+
+        // Add new group
+        if (ImGui::CollapsingHeader("Deformation Controls", ImGuiTreeNodeFlags_DefaultOpen)) {
+
+            // Expose an enumeration type
+            ImGui::Combo("MouseMode", (int *) (&mouse_mode), "SELECT\0TRANSLATE\0ROTATE\0NONE\0\0");
+
+            // Add a button
+            if (ImGui::Button("ApplySelection")) {
+                applySelection();
+            }
+            if (ImGui::Button("ClearConstraints")) {
+                handle_id.setConstant(V.rows(), 1, -1);
+            }
+        }
+    };
+
+    viewer.callback_mouse_down = callback_mouse_down;
+    viewer.callback_mouse_move = callback_mouse_move;
+    viewer.callback_mouse_up = callback_mouse_up;
+//    viewer.callback_pre_draw = callback_pre_draw;
+    viewer.callback_pre_draw = callback_pre_draw_point;
+
 //    viewer.data().clear();
-//    viewer.data().set_mesh(V, FI);
-//    // draw cage
-//    init_cage();
-//
-//    igl::opengl::glfw::imgui::ImGuiMenu menu;
-//    viewer.plugins.push_back(&menu);
-//    viewer.callback_key_down = callback_key_down;
-//    // Add content to the default menu window
-//    menu.callback_draw_viewer_menu = [&]() {
-//        // Draw parent menu content
-//        menu.draw_viewer_menu();
-//
-//        // Add new group
-//        if (ImGui::CollapsingHeader("Deformation Controls", ImGuiTreeNodeFlags_DefaultOpen)) {
-//
-//            // Expose an enumeration type
-//            ImGui::Combo("MouseMode", (int *) (&mouse_mode), "SELECT\0TRANSLATE\0ROTATE\0NONE\0\0");
-//
-//            // Add a button
-//            if (ImGui::Button("ApplySelection")) {
-//                applySelection();
-//            }
-//            if (ImGui::Button("ClearConstraints")) {
-//                handle_id.setConstant(V.rows(), 1, -1);
-//            }
-//        }
-//    };
-//
-//    viewer.callback_mouse_down = callback_mouse_down;
-//    viewer.callback_mouse_move = callback_mouse_move;
-//    viewer.callback_mouse_up = callback_mouse_up;
-////    viewer.callback_pre_draw = callback_pre_draw;
-//    viewer.callback_pre_draw = callback_pre_draw_point;
-//
-////    viewer.data().clear();
-////    viewer.data().set_mesh(V, F);
-//
-//    // Initialize selector
-//    lasso = std::unique_ptr<Lasso>(new Lasso(V, F, viewer));
-//    viewer.core.set_rotation_type(igl::opengl::ViewerCore::ROTATION_TYPE_TRACKBALL);
-//    viewer.launch();
+//    viewer.data().set_mesh(V, F);
+
+    // Initialize selector
+    lasso = std::unique_ptr<Lasso>(new Lasso(V, F, viewer));
+    viewer.core.set_rotation_type(igl::opengl::ViewerCore::ROTATION_TYPE_TRACKBALL);
+    viewer.launch();
 }
 
 
@@ -567,6 +487,31 @@ bool callback_mouse_up(igl::opengl::glfw::Viewer &viewer, int button, int modifi
 bool callback_pre_draw_point(igl::opengl::glfw::Viewer &viewer) {
     // Initialize vertex colors
     vertex_colors = Eigen::MatrixXd::Constant(V.rows(), 3, .9);
+// Initialize vertex colors
+    vertex_colors = Eigen::MatrixXd::Constant(V.rows(), 3, .9);
+
+    //first, color constraints
+    int num = handle_id.maxCoeff();
+    if (num == 0)
+        num = 1;
+    for (int i = 0; i < V.rows(); ++i)
+        if (handle_id[i] != -1) {
+            int r = handle_id[i] % MAXNUMREGIONS;
+            vertex_colors.row(i) << regionColors[r][0], regionColors[r][1], regionColors[r][2];
+        }
+
+    //then, color selection
+    for (int i = 0; i < selected_v.size(); ++i)
+        vertex_colors.row(selected_v[i]) << 131. / 255, 131. / 255, 131. / 255.;
+    viewer.data().set_colors(vertex_colors);
+
+    //draw the stroke of the selection
+    for (unsigned int i = 0; i < lasso->strokePoints.size(); ++i) {
+        viewer.data().add_points(lasso->strokePoints[i], Eigen::RowVector3d(0.4, 0.4, 0.4));
+        if (i > 1)
+            viewer.data().add_edges(lasso->strokePoints[i - 1], lasso->strokePoints[i],
+                                    Eigen::RowVector3d(0.7, 0.7, .7));
+    }
 
     //clear points and lines
     viewer.data().set_points(Eigen::MatrixXd::Zero(0, 3), Eigen::MatrixXd::Zero(0, 3));
@@ -722,7 +667,35 @@ bool callback_key_down(igl::opengl::glfw::Viewer &viewer, unsigned char key, int
         handled = true;
     }
 
-    if ((key == 'T') && (modifiers == IGL_MOD_ALT)) {
+    if ((key ==// Initialize vertex colors
+    vertex_colors = Eigen::MatrixXd::Constant(V.rows(), 3, .9);
+
+    //first, color constraints
+    int num = handle_id.maxCoeff();
+    if (num == 0)
+        num = 1;
+    for (int i = 0; i < V.rows(); ++i)
+        if (handle_id[i] != -1) {
+            int r = handle_id[i] % MAXNUMREGIONS;
+            vertex_colors.row(i) << regionColors[r][0], regionColors[r][1], regionColors[r][2];
+        }
+    //then, color selection
+    for (int i = 0; i < selected_v.size(); ++i)
+        vertex_colors.row(selected_v[i]) << 131. / 255, 131. / 255, 131. / 255.;
+    viewer.data().set_colors(vertex_colors);
+
+
+    //clear points and lines
+    viewer.data().set_points(Eigen::MatrixXd::Zero(0, 3), Eigen::MatrixXd::Zero(0, 3));
+    viewer.data().set_edges(Eigen::MatrixXd::Zero(0, 3), Eigen::MatrixXi::Zero(0, 3), Eigen::MatrixXd::Zero(0, 3));
+
+    //draw the stroke of the selection
+    for (unsigned int i = 0; i < lasso->strokePoints.size(); ++i) {
+        viewer.data().add_points(lasso->strokePoints[i], Eigen::RowVector3d(0.4, 0.4, 0.4));
+        if (i > 1)
+            viewer.data().add_edges(lasso->strokePoints[i - 1], lasso->strokePoints[i],
+                                    Eigen::RowVector3d(0.7, 0.7, .7));
+    e 'T') && (modifiers == IGL_MOD_ALT)) {
         mouse_mode = TRANSLATE;
         handled = true;
     }
